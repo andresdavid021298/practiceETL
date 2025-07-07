@@ -1,11 +1,13 @@
 package main
 
 import (
+	"ETLProject/config"
 	"ETLProject/service"
 	"log"
 )
 
 func main() {
+	config.InitAWS()
 	log.Println("** INICIO ETL NOMINA **")
 	nominaService := service.NominaService{}
 	processNominaResponse := nominaService.ProcesarNominaPorArchivo()

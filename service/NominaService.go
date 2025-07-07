@@ -8,17 +8,15 @@ import (
 	"log"
 	"strconv"
 	"strings"
+
+	"github.com/xuri/excelize/v2"
 )
 
 type NominaService struct {
 }
 
 func (service NominaService) ProcesarNominaPorArchivo() string {
-	pathFileNomina := util.LoadProperty("nomina.file.path")
-	fileContent := component.ReadFile(pathFileNomina)
-	nominaRecords := strings.Split(fileContent, "\n")
-	log.Println("** REGISTROS LEIDOS DEL ARCHIVO DE NOMINA:", len(nominaRecords), "**")
-	empleados := convertirLineasStringToListaEmpleados(nominaRecords)
+	empleados := leerEmpleadosSegunArchivo()
 	empleadosPorDepartamento := dividirEmpleadosPorDepartamento(empleados)
 	var sb strings.Builder
 	for depto, lista := range empleadosPorDepartamento {
@@ -26,14 +24,28 @@ func (service NominaService) ProcesarNominaPorArchivo() string {
 	}
 	mailTo := util.LoadProperty("to.mail.address")
 	util.SendMail(mailTo, "Reporte de Empleados por Departamento", sb.String())
+	bucketName := util.LoadProperty("aws.s3.bucket.nomina")
+	seCreoExcelExitoso := crearExcelPorDepartamento(empleadosPorDepartamento)
+	if seCreoExcelExitoso {
+		component.UploadFileToS3(bucketName, util.LoadProperty("nomina.file.excel.path"))
+	}
 	return "Ok"
+}
+
+func leerEmpleadosSegunArchivo() []model.Empleado {
+	pathFileNomina := util.LoadProperty("nomina.file.path")
+	fileContent := component.ReadFile(pathFileNomina)
+	nominaRecords := strings.Split(fileContent, "\n")
+	log.Println("** REGISTROS LEIDOS DEL ARCHIVO DE NOMINA:", len(nominaRecords), "**")
+	empleados := convertirLineasStringToListaEmpleados(nominaRecords)
+	return empleados
 }
 
 func convertirLineasStringToListaEmpleados(lines []string) []model.Empleado {
 	var empleados []model.Empleado
 	for _, line := range lines {
 		empleadoData := strings.Split(line, ";")
-		if hasEmptyInformation(line) {
+		if tieneDataVacia(line) {
 			continue
 		}
 		idEmpleado, _ := strconv.Atoi(empleadoData[0])
@@ -51,7 +63,7 @@ func convertirLineasStringToListaEmpleados(lines []string) []model.Empleado {
 	return empleados
 }
 
-func hasEmptyInformation(line string) bool {
+func tieneDataVacia(line string) bool {
 	empleadoData := strings.Split(line, ";")
 	for _, data := range empleadoData {
 		if strings.TrimSpace(data) == "" {
@@ -67,4 +79,29 @@ func dividirEmpleadosPorDepartamento(empleados []model.Empleado) map[string][]mo
 		empleadosPorDepartamentoMap[e.Departamento] = append(empleadosPorDepartamentoMap[e.Departamento], e)
 	}
 	return empleadosPorDepartamentoMap
+}
+
+func crearExcelPorDepartamento(empleadosPorDepartamento map[string][]model.Empleado) bool {
+	log.Println("** CREANDO ARCHIVO EXCEL POR DEPARTAMENTO **")
+
+	excelFile := excelize.NewFile()
+
+	excelFile.SetCellValue("Sheet1", "A1", "Departamento")
+	excelFile.SetCellValue("Sheet1", "B1", "Cantidad Empleados")
+
+	numeroFila := 2
+	for departamento, empleados := range empleadosPorDepartamento {
+		excelFile.SetCellValue("Sheet1", fmt.Sprintf("A%d", numeroFila), departamento)
+		excelFile.SetCellValue("Sheet1", fmt.Sprintf("B%d", numeroFila), len(empleados))
+		numeroFila++
+	}
+
+	nominaExcelPath := util.LoadProperty("nomina.file.excel.path")
+	if err := excelFile.SaveAs(nominaExcelPath); err != nil {
+		log.Println("** ERROR GENERANDO EL ARCHIVO EXCEL **")
+		return false
+	}
+
+	log.Println("** ARCHIVO NOMINA GENERADO CORRECTAMENTE **")
+	return true
 }
